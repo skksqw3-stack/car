@@ -1,51 +1,20 @@
 
-name: Godot Android APK Build
+name: Godot APK Build
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install unzip tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y p7zip-full
-
-      - name: Extract split ZIP
-        run: |
-          echo "Searching for ZIP files..."
-
-          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found"
-            exit 1
-          fi
-
-          echo "Found: $ZIP_FILE"
-
-          7z x "$ZIP_FILE" -y -o./extracted
-
-          PROJECT_FILE=$(find ./extracted -type f -name "project.godot" | head -n 1)
-
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "ERROR: project.godot not found after extraction"
-            find ./extracted -maxdepth 4 -type f | head -n 100
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$PROJECT_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-
-          echo "Godot project found: $PROJECT_DIR"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -53,17 +22,36 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android packages
+      - name: Install Android SDK without setup-android action
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager --install "platform-tools"
-          sdkmanager --install "platforms;android-33"
-          sdkmanager --install "build-tools;33.0.2"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;33.0.2"
 
-      - name: Download Godot 4.2.2
+      - name: Install 7zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+
+      - name: Extract project
+        run: |
+          mkdir -p extracted
+          7z x "New folder (8).zip" -y -oextracted
+
+          PROJECT_FILE=$(find extracted -type f -name project.godot | head -n 1)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: Godot project not found"
+            find extracted -maxdepth 5 -type f | head -n 100
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$(dirname "$PROJECT_FILE")" >> $GITHUB_ENV
+
+      - name: Download Godot
         run: |
           wget -q https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_linux.x86_64.zip
           unzip -q Godot_v4.2.2-stable_linux.x86_64.zip
@@ -74,18 +62,12 @@ jobs:
         run: |
           wget -q https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz
           mkdir -p ~/.local/share/godot/export_templates/4.2.2.stable
-          unzip -q Godot_v4.2.2-stable_export_templates.tpz -d /tmp/godot_templates
-          cp -r /tmp/godot_templates/templates/. ~/.local/share/godot/export_templates/4.2.2.stable/
-
-      - name: Check Android Export Preset
-        run: |
-          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
-            echo "ERROR: Android export_presets.cfg is missing"
-            exit 1
-          fi
+          unzip -q Godot_v4.2.2-stable_export_templates.tpz -d /tmp/templates
+          cp -r /tmp/templates/templates/. ~/.local/share/godot/export_templates/4.2.2.stable/
 
       - name: Export APK
         run: |
+          test -f "$PROJECT_DIR/export_presets.cfg"
           mkdir -p build
           godot --headless --editor --path "$PROJECT_DIR" --quit
           godot --headless --path "$PROJECT_DIR" --export-debug "Android" build/car.apk
@@ -93,6 +75,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Car-Android-APK
+          name: Car-APK
           path: build/car.apk
           if-no-files-found: error
