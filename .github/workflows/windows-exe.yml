@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip p7zip-full
+          sudo apt-get install -y wget unzip p7zip-full zip
 
       - name: Extract Godot project
         shell: bash
@@ -46,6 +46,7 @@ jobs:
 
           if [ -z "$PROJECT_FILE" ]; then
             echo "ERROR: project.godot not found!"
+            find extracted -maxdepth 4 -type f
             exit 1
           fi
 
@@ -71,23 +72,35 @@ jobs:
 
           godot --version
 
-      - name: Install Godot Export Templates
+      - name: Install Windows Export Templates
+        shell: bash
         run: |
-          mkdir -p "$HOME/.local/share/godot/export_templates"
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.2.2.stable"
+
+          mkdir -p "$TEMPLATE_DIR"
 
           wget -q \
             https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz \
             -O templates.tpz
 
-          mkdir templates
+          mkdir -p templates
 
           unzip -q templates.tpz -d templates
 
-          mkdir -p \
-            "$HOME/.local/share/godot/export_templates/4.2.2.stable"
+          cp -a templates/templates/. "$TEMPLATE_DIR/"
 
-          cp -a templates/templates/. \
-            "$HOME/.local/share/godot/export_templates/4.2.2.stable/"
+          echo "===== TEMPLATE FILES ====="
+          find "$TEMPLATE_DIR" -maxdepth 1 -type f
+
+          if [ ! -f "$TEMPLATE_DIR/windows_release_x86_64.exe" ]; then
+            echo "ERROR: Windows release template is missing!"
+            exit 1
+          fi
+
+          if [ ! -f "$TEMPLATE_DIR/windows_debug_x86_64.exe" ]; then
+            echo "ERROR: Windows debug template is missing!"
+            exit 1
+          fi
 
       - name: Import Godot Project
         run: |
@@ -108,9 +121,15 @@ jobs:
           if grep -q 'name="Windows Desktop"' "$PRESET"; then
             echo "Windows preset already exists."
           else
-            cat >> "$PRESET" <<'EOF'
+            INDEX=0
 
-          [preset.1]
+            while grep -q "^\[preset\.$INDEX\]" "$PRESET"; do
+              INDEX=$((INDEX + 1))
+            done
+
+            cat >> "$PRESET" <<EOF
+
+          [preset.$INDEX]
 
           name="Windows Desktop"
           platform="Windows Desktop"
@@ -122,7 +141,7 @@ jobs:
           exclude_filter=""
           export_path=""
 
-          [preset.1.options]
+          [preset.$INDEX.options]
 
           custom_template/debug=""
           custom_template/release=""
@@ -139,24 +158,26 @@ jobs:
           cat "$PRESET"
 
       - name: Export Windows EXE
+        shell: bash
         run: |
-          mkdir -p build
+          mkdir -p "$GITHUB_WORKSPACE/build"
 
           godot --headless \
             --verbose \
             --path "$PROJECT_DIR" \
             --export-release "Windows Desktop" \
-            build/Car.exe \
-            2>&1 | tee build/export-log.txt
+            "$GITHUB_WORKSPACE/build/Car.exe" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build/export-log.txt"
 
-          if [ ! -f build/Car.exe ]; then
-            echo "ERROR: EXE was not generated."
+          if [ ! -s "$GITHUB_WORKSPACE/build/Car.exe" ]; then
+            echo "ERROR: EXE was not generated!"
             exit 1
           fi
 
-          echo "Windows EXE successfully generated!"
+          echo "===== EXE GENERATED ====="
+          ls -lh "$GITHUB_WORKSPACE/build/Car.exe"
 
-      - name: Prepare Windows Package
+      - name: Prepare Windows Game Package
         run: |
           mkdir -p build/Car-Windows
 
@@ -167,10 +188,9 @@ jobs:
           fi
 
           cd build
-
           zip -r Car-Windows.zip Car-Windows
 
-      - name: Upload EXE
+      - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
           name: Car-Windows-EXE
@@ -179,3 +199,12 @@ jobs:
             build/Car-Windows/*
             build/export-log.txt
 
+      - name: Upload Diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Build-Diagnostics
+          path: |
+            build/export-log.txt
+            ${{ env.PROJECT_DIR }}/export_presets.cfg
+          if-no-files-found: warn
