@@ -1,0 +1,181 @@
+
+name: Godot Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows EXE
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip p7zip-full
+
+      - name: Extract Godot project
+        shell: bash
+        run: |
+          mkdir -p extracted
+
+          if [ ! -f "New folder (8).zip" ]; then
+            echo "ERROR: New folder (8).zip not found!"
+            exit 1
+          fi
+
+          7z x "New folder (8).zip" -oextracted -y
+
+          PROJECT_FILE=$(find extracted \
+            -name project.godot \
+            -type f \
+            -print -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: project.godot not found!"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Install Godot 4.2.2
+        run: |
+          wget -q \
+            https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_linux.x86_64.zip \
+            -O godot.zip
+
+          unzip -q godot.zip -d godot-bin
+
+          chmod +x godot-bin/Godot_v4.2.2-stable_linux.x86_64
+
+          sudo mv \
+            godot-bin/Godot_v4.2.2-stable_linux.x86_64 \
+            /usr/local/bin/godot
+
+          godot --version
+
+      - name: Install Godot Export Templates
+        run: |
+          mkdir -p "$HOME/.local/share/godot/export_templates"
+
+          wget -q \
+            https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz \
+            -O templates.tpz
+
+          mkdir templates
+
+          unzip -q templates.tpz -d templates
+
+          mkdir -p \
+            "$HOME/.local/share/godot/export_templates/4.2.2.stable"
+
+          cp -a templates/templates/. \
+            "$HOME/.local/share/godot/export_templates/4.2.2.stable/"
+
+      - name: Import Godot Project
+        run: |
+          godot --headless \
+            --editor \
+            --path "$PROJECT_DIR" \
+            --quit
+
+      - name: Create Windows Export Preset
+        shell: bash
+        run: |
+          PRESET="$PROJECT_DIR/export_presets.cfg"
+
+          if [ ! -f "$PRESET" ]; then
+            touch "$PRESET"
+          fi
+
+          if grep -q 'name="Windows Desktop"' "$PRESET"; then
+            echo "Windows preset already exists."
+          else
+            cat >> "$PRESET" <<'EOF'
+
+          [preset.1]
+
+          name="Windows Desktop"
+          platform="Windows Desktop"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path=""
+
+          [preset.1.options]
+
+          custom_template/debug=""
+          custom_template/release=""
+          debug/export_console_wrapper=1
+          binary_format/architecture="x86_64"
+          binary_format/embed_pck=false
+          texture_format/bptc=false
+          texture_format/s3tc=true
+          texture_format/etc=false
+          EOF
+          fi
+
+          echo "===== EXPORT PRESETS ====="
+          cat "$PRESET"
+
+      - name: Export Windows EXE
+        run: |
+          mkdir -p build
+
+          godot --headless \
+            --verbose \
+            --path "$PROJECT_DIR" \
+            --export-release "Windows Desktop" \
+            build/Car.exe \
+            2>&1 | tee build/export-log.txt
+
+          if [ ! -f build/Car.exe ]; then
+            echo "ERROR: EXE was not generated."
+            exit 1
+          fi
+
+          echo "Windows EXE successfully generated!"
+
+      - name: Prepare Windows Package
+        run: |
+          mkdir -p build/Car-Windows
+
+          cp build/Car.exe build/Car-Windows/
+
+          if [ -f build/Car.pck ]; then
+            cp build/Car.pck build/Car-Windows/
+          fi
+
+          cd build
+
+          zip -r Car-Windows.zip Car-Windows
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Car-Windows-EXE
+          path: |
+            build/Car-Windows.zip
+            build/Car-Windows/*
+            build/export-log.txt
+
