@@ -4,7 +4,9 @@ name: Godot Android APK Build
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
 
 jobs:
   build:
@@ -15,21 +17,24 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
+      # 1. Download repository
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 2. Install Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
+      # 3. Install Android SDK
       - name: Install Android SDK
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
+            echo "ERROR: SDK Manager not found"
             exit 1
           fi
 
@@ -39,44 +44,59 @@ jobs:
           "$SDKMANAGER" --install "platforms;android-33"
           "$SDKMANAGER" --install "build-tools;33.0.2"
 
+      # 4. Install extraction tools
       - name: Install 7zip
         run: |
           sudo apt-get update
           sudo apt-get install -y p7zip-full
 
-      - name: Extract Godot project
+      # 5. Extract split ZIP
+      - name: Extract Project
         run: |
           mkdir -p extracted
+
           7z x "New folder (8).zip" -y -oextracted
 
-          PROJECT_FILE=$(find extracted -type f -name project.godot | head -n 1)
+          PROJECT_FILE=$(find extracted -type f -name "project.godot" | head -n 1)
 
           if [ -z "$PROJECT_FILE" ]; then
             echo "ERROR: project.godot not found"
-            find extracted -maxdepth 5 -type f | head -n 100
+            find extracted -maxdepth 5 -type f | head -n 150
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PROJECT_FILE")
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Found project: $PROJECT_DIR"
+          echo "Godot project found: $PROJECT_DIR"
 
+      # 6. Download Godot
       - name: Download Godot 4.2.2
         run: |
           wget -q https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_linux.x86_64.zip
+
           unzip -q Godot_v4.2.2-stable_linux.x86_64.zip
+
           chmod +x Godot_v4.2.2-stable_linux.x86_64
+
           sudo mv Godot_v4.2.2-stable_linux.x86_64 /usr/local/bin/godot
 
-      - name: Install Godot Export Templates
+          godot --version
+
+      # 7. Install export templates
+      - name: Install Export Templates
         run: |
           wget -q https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz
+
           mkdir -p ~/.local/share/godot/export_templates/4.2.2.stable
+
           unzip -q Godot_v4.2.2-stable_export_templates.tpz -d /tmp/godot_templates
+
           cp -r /tmp/godot_templates/templates/. ~/.local/share/godot/export_templates/4.2.2.stable/
 
-      - name: Generate Android Debug Keystore
+      # 8. Generate debug keystore
+      - name: Generate Debug Keystore
         run: |
           mkdir -p ~/.android
 
@@ -90,7 +110,8 @@ jobs:
             -keysize 2048 \
             -validity 10000
 
-      - name: Configure Godot Android Settings
+      # 9. Configure Godot
+      - name: Configure Godot
         run: |
           mkdir -p ~/.config/godot
 
@@ -105,30 +126,67 @@ jobs:
           export/android/debug_keystore_password = "android"
           EOF
 
-      - name: Check Export Preset
+      # 10. Check project
+      - name: Check Project
         run: |
-          test -f "$PROJECT_DIR/export_presets.cfg"
+          echo "Project directory: $PROJECT_DIR"
 
-          grep -A 8 '^\[preset\.0\]' "$PROJECT_DIR/export_presets.cfg" || true
+          test -f "$PROJECT_DIR/project.godot"
 
+          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
+            echo "ERROR: export_presets.cfg missing"
+            exit 1
+          fi
+
+          echo "========== EXPORT PRESETS =========="
+          cat "$PROJECT_DIR/export_presets.cfg"
+
+      # 11. Import project
       - name: Import Godot Project
         run: |
           godot --headless --editor --path "$PROJECT_DIR" --quit
 
+      # 12. Diagnose and export
       - name: Export Android APK
         run: |
           mkdir -p build
 
+          set +e
+
           godot --headless \
+            --verbose \
             --path "$PROJECT_DIR" \
-            --export-debug "Android" \
-            build/Car.apk
+            --export-debug "Android" build/Car.apk \
+            2>&1 | tee build/export-log.txt
 
-          test -s build/Car.apk
+          EXPORT_STATUS=${PIPESTATUS[0]}
 
+          set -e
+
+          if [ "$EXPORT_STATUS" -ne 0 ] || [ ! -s build/Car.apk ]; then
+            echo "APK export failed"
+            echo "Checking available export presets:"
+            grep -n "^\[preset" "$PROJECT_DIR/export_presets.cfg" || true
+            exit 1
+          fi
+
+          echo "APK successfully created"
+          ls -lh build/Car.apk
+
+      # 13. Upload APK
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Car-Android-APK
           path: build/Car.apk
           if-no-files-found: error
+
+      # 14. Upload error log
+      - name: Upload Diagnostic Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Godot-Export-Log
+          path: build/export-log.txt
+          if-no-files-found: warn
