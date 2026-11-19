@@ -12,55 +12,75 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager --install "platform-tools"
-          sdkmanager --install "platforms;android-33"
-          sdkmanager --install "build-tools;33.0.2"
-          sdkmanager --install "cmdline-tools;latest"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> $GITHUB_ENV
+
+      - name: Accept SDK licenses and install packages
+        run: |
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" --install "platform-tools"
+          "$SDKMANAGER" --install "platforms;android-33"
+          "$SDKMANAGER" --install "build-tools;33.0.2"
 
       - name: Download Godot 4.2.2
         run: |
-          wget https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_linux.x86_64.zip
-          unzip Godot_v4.2.2-stable_linux.x86_64.zip
+          wget -q https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_linux.x86_64.zip
+          unzip -q Godot_v4.2.2-stable_linux.x86_64.zip
           chmod +x Godot_v4.2.2-stable_linux.x86_64
           sudo mv Godot_v4.2.2-stable_linux.x86_64 /usr/local/bin/godot
 
-      - name: Install Godot Export Templates
+      - name: Install Export Templates
         run: |
-          wget https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz
+          wget -q https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz
           mkdir -p ~/.local/share/godot/export_templates/4.2.2.stable
           unzip -q Godot_v4.2.2-stable_export_templates.tpz -d /tmp/godot_templates
           cp -r /tmp/godot_templates/templates/. ~/.local/share/godot/export_templates/4.2.2.stable/
 
-      - name: Check Godot project
+      - name: Check project files
         run: |
-          test -f project.godot || {
+          if [ ! -f project.godot ]; then
             echo "ERROR: project.godot not found in repository root"
             exit 1
-          }
+          fi
 
-      - name: Build Android APK
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          if [ ! -f export_presets.cfg ]; then
+            echo "ERROR: export_presets.cfg not found"
+            exit 1
+          fi
+
+      - name: Configure Godot Android SDK
+        run: |
+          mkdir -p ~/.config/godot
+          godot --headless --editor --path . --quit
+
+      - name: Export APK
         run: |
           mkdir -p build
-          godot --headless --path . --editor --quit
           godot --headless --path . --export-debug "Android" build/car.apk
 
       - name: Upload APK
