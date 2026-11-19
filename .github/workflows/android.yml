@@ -20,17 +20,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Find Godot project
+        id: project
+        run: |
+          PROJECT_FILE=$(find . -type f -name "project.godot" -not -path "*/.godot/*" | head -n 1)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: No project.godot found in repository"
+            echo "Repository files:"
+            find . -maxdepth 4 -type f | head -n 150
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Found project: $PROJECT_FILE"
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
+      - name: Install Android SDK
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
 
           if [ -z "$SDKMANAGER" ]; then
@@ -38,10 +51,6 @@ jobs:
             exit 1
           fi
 
-          echo "SDKMANAGER=$SDKMANAGER" >> $GITHUB_ENV
-
-      - name: Accept SDK licenses and install packages
-        run: |
           yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platform-tools"
           "$SDKMANAGER" --install "platforms;android-33"
@@ -61,31 +70,24 @@ jobs:
           unzip -q Godot_v4.2.2-stable_export_templates.tpz -d /tmp/godot_templates
           cp -r /tmp/godot_templates/templates/. ~/.local/share/godot/export_templates/4.2.2.stable/
 
-      - name: Check project files
+      - name: Check export preset
         run: |
-          if [ ! -f project.godot ]; then
-            echo "ERROR: project.godot not found in repository root"
+          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
+            echo "ERROR: export_presets.cfg not found in $PROJECT_DIR"
             exit 1
           fi
 
-          if [ ! -f export_presets.cfg ]; then
-            echo "ERROR: export_presets.cfg not found"
-            exit 1
-          fi
-
-      - name: Configure Godot Android SDK
-        run: |
-          mkdir -p ~/.config/godot
-          godot --headless --editor --path . --quit
+          cat "$PROJECT_DIR/export_presets.cfg"
 
       - name: Export APK
         run: |
-          mkdir -p build
-          godot --headless --path . --export-debug "Android" build/car.apk
+          mkdir -p "$PROJECT_DIR/build"
+          godot --headless --editor --path "$PROJECT_DIR" --quit
+          godot --headless --path "$PROJECT_DIR" --export-debug "Android" "$PROJECT_DIR/build/car.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Car-Android-APK
-          path: build/car.apk
+          path: "**/build/car.apk"
           if-no-files-found: error
