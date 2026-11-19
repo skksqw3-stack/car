@@ -1,5 +1,5 @@
 
-name: Android APK Build
+name: Godot Android APK Build
 
 on:
   workflow_dispatch:
@@ -16,33 +16,56 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
         run: |
+          yes | sdkmanager --licenses
           sdkmanager --install "platform-tools"
-          sdkmanager --install "platforms;android-35"
-          sdkmanager --install "build-tools;35.0.0"
+          sdkmanager --install "platforms;android-33"
+          sdkmanager --install "build-tools;33.0.2"
+          sdkmanager --install "cmdline-tools;latest"
 
-      - name: Grant execute permission
+      - name: Download Godot 4.2.2
         run: |
-          chmod +x ./gradlew
+          wget https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_linux.x86_64.zip
+          unzip Godot_v4.2.2-stable_linux.x86_64.zip
+          chmod +x Godot_v4.2.2-stable_linux.x86_64
+          sudo mv Godot_v4.2.2-stable_linux.x86_64 /usr/local/bin/godot
 
-      - name: Build Debug APK
+      - name: Install Godot Export Templates
         run: |
-          ./gradlew assembleDebug --stacktrace
+          wget https://github.com/godotengine/godot/releases/download/4.2.2-stable/Godot_v4.2.2-stable_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates/4.2.2.stable
+          unzip -q Godot_v4.2.2-stable_export_templates.tpz -d /tmp/godot_templates
+          cp -r /tmp/godot_templates/templates/. ~/.local/share/godot/export_templates/4.2.2.stable/
+
+      - name: Check Godot project
+        run: |
+          test -f project.godot || {
+            echo "ERROR: project.godot not found in repository root"
+            exit 1
+          }
+
+      - name: Build Android APK
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          mkdir -p build
+          godot --headless --path . --editor --quit
+          godot --headless --path . --export-debug "Android" build/car.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Android-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: Car-Android-APK
+          path: build/car.apk
           if-no-files-found: error
